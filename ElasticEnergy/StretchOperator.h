@@ -67,10 +67,25 @@ class StretchOperator {
 		///
 		std::vector< Matrix9d > m_hessL2;
 
+    ///
+    /// The thickness of the elastic shell
+    ///
+    double m_h;
+
 		///
 		/// Poisson's ratio
 		///
 		double m_nu;
+
+    ///
+    /// Young's modulus
+    ///
+    double m_Y;
+
+    ///
+    /// A material constant constructed from Poisson's ratio and Young's modulus
+    ///
+    double m_C;
 
 	public:
 		///
@@ -81,7 +96,7 @@ class StretchOperator {
 		///
 		/// Default constructor
 		///
-		StretchOperator( double nu );
+		StretchOperator( double h, double nu, double Y );
 
 		///
 		/// An overloaded function to calculate the stretching energy.
@@ -108,7 +123,7 @@ class StretchOperator {
 		/// An overloaded function that maps local gradient quantities to the global
 		/// gradient vector
 		///
-		void mapLocalToGlobal( Face_handle f, 
+		void mapLocalToGlobal( Face_handle f,
 				const RowGradS &LGrad, VectorXd &GGrad );
 
 		///
@@ -124,9 +139,13 @@ class StretchOperator {
 ///
 /// Default constructor
 ///
-StretchOperator::StretchOperator( double nu ) : m_nu( nu ) {
+StretchOperator::StretchOperator( double h, double nu, double Y ) :
+  m_h( h ), m_nu( nu ), m_Y( Y ) {
 
+  // Calculate the material constant
+  this->m_C = h * Y / ( 1.0 - nu * nu );
 
+  // Construct the constant edge gradient matrices
 	Matrix3d Z3 = Matrix3d::Zero();
 	Matrix3d I3 = Matrix3d::Identity();
 
@@ -142,6 +161,7 @@ StretchOperator::StretchOperator( double nu ) : m_nu( nu ) {
 	std::vector< Eigen::Matrix<double, 3, 9> > gradE{ gradEI, gradEJ, gradEK };
 	this->m_gradE = gradE;
 
+  // Construct the constant edge-length-squared hessian matrices
 	MatrixXd Z9 = Matrix9d::Zero();
 
 	Matrix9d hessL2I;
@@ -194,10 +214,10 @@ void StretchOperator::mapLocalToGlobal( Face_handle f,
 	GGrad( vk + (2*Nv) ) += LGrad(8);
 
 };
-	
+
 ///
 /// An overloaded function that maps local Hessian quantities to the vector of
-/// Eigen-style triplets, which will be used to construct the global Hessian 
+/// Eigen-style triplets, which will be used to construct the global Hessian
 /// matrix of the stretching energy
 ///
 void StretchOperator::mapLocalToGlobal( Face_handle f, int Nv,
@@ -209,7 +229,7 @@ void StretchOperator::mapLocalToGlobal( Face_handle f, int Nv,
 	vi = f->halfedge()->next()->vertex()->id();
 	vj = f->halfedge()->prev()->vertex()->id();
 	vk = f->halfedge()->vertex()->id();
-	
+
 	std::vector<int> vID = { vi, vj, vk };
 	for( int m = 0; m < 3; m++ ) {
 
@@ -230,7 +250,7 @@ void StretchOperator::mapLocalToGlobal( Face_handle f, int Nv,
 			GTrip.push_back( Triplet( mID+Nv, nID, LHess(M+1,N) ) );
 			GTrip.push_back( Triplet( mID+Nv, nID+Nv, LHess(M+1,N+1) ) );
 			GTrip.push_back( Triplet( mID+Nv, nID+(2*Nv), LHess(M+1,N+2) ) );
-			
+
 			// Z-coordinate --------------------------------------------
 			GTrip.push_back( Triplet( mID+(2*Nv), nID, LHess(M+2,N) ) );
 			GTrip.push_back( Triplet( mID+(2*Nv), nID+Nv, LHess(M+2,N+1) ) );
@@ -285,8 +305,8 @@ double StretchOperator::operator()( Polyhedron &P ) {
 		}
 
 		// Single stencil contribution to the energy
-		Estretch += tarA * ( m_nu * trE * trE + (1.0-m_nu) * trE2 ) / 8.0;
-		
+		Estretch += m_C * tarA * ( m_nu * trE * trE + (1.0-m_nu) * trE2 ) / 8.0;
+
 	}
 
 	return Estretch;
@@ -349,7 +369,7 @@ double StretchOperator::operator()( Polyhedron &P, VectorXd &grad ) {
 			for( int j = (i+1); j < 3; j++ ) {
 
 				trE2 += zeta(i,j) * str(i) * str(j);
-				
+
 				gradTrE2 += zeta(i,j) * ( str(i)*gradL2[j] + str(j)*gradL2[i] );
 
 			}
@@ -357,13 +377,13 @@ double StretchOperator::operator()( Polyhedron &P, VectorXd &grad ) {
 		}
 
 		// Single stencil contribution to the energy
-		Estretch += tarA * ( m_nu * trE * trE + (1.0-m_nu) * trE2 ) / 8.0;
+		Estretch += m_C * tarA * ( m_nu * trE * trE + (1.0-m_nu) * trE2 ) / 8.0;
 
 		// Single stencil constribution to the energy gradient
-		RowGradS gradES = tarA * ( 2.0 * m_nu * trE * gradTrE +
+		RowGradS gradES = m_C * tarA * ( 2.0 * m_nu * trE * gradTrE +
 				(1.0 - m_nu) * gradTrE2 ) / 8.0;
 		this->mapLocalToGlobal( f, gradES, grad );
-		
+
 	}
 
 	return Estretch;
@@ -443,7 +463,7 @@ double StretchOperator::operator()( Polyhedron &P, VectorXd &grad, SparseMatrix 
 			for( int j = (i+1); j < 3; j++ ) {
 
 				trE2 += zeta(i,j) * str(i) * str(j);
-				
+
 				gradTrE2 += zeta(i,j) * ( str(i)*gradL2[j] + str(j)*gradL2[i] );
 
 				hessTrE2 += zeta(i,j) * (
@@ -452,26 +472,24 @@ double StretchOperator::operator()( Polyhedron &P, VectorXd &grad, SparseMatrix 
 					gradL2[i].transpose() * gradL2[j] +
 					gradL2[j].transpose() * gradL2[i] );
 
-
 			}
 
 		}
 
 		// Single stencil contribution to the energy
-		Estretch += tarA * ( m_nu * trE * trE + (1.0-m_nu) * trE2 ) / 8.0;
+		Estretch += m_C * tarA * ( m_nu * trE * trE + (1.0-m_nu) * trE2 ) / 8.0;
 
 		// Single stencil constribution to the energy gradient
-		RowGradS gradES = tarA * ( 2.0 * m_nu * trE * gradTrE +
+		RowGradS gradES = m_C * tarA * ( 2.0 * m_nu * trE * gradTrE +
 				(1.0 - m_nu) * gradTrE2 ) / 8.0;
 		this->mapLocalToGlobal( f, gradES, grad );
 
 		// Single stencil contribution to the energy Hessian
-		Matrix9d hessES = tarA * (
+		Matrix9d hessES = m_C * tarA * (
 				2.0 * m_nu * ( gradTrE.transpose() * gradTrE + trE * hessTrE ) +
 				(1.0-m_nu) * hessTrE2 ) / 8.0;
 		this->mapLocalToGlobal( f, Nv, hessES, tripletList );
 
-		
 	}
 
 	// Compile the triplet list into the global Hessian matrix
